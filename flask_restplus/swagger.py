@@ -13,8 +13,11 @@ from six import string_types, itervalues, iteritems, iterkeys
 
 from flask import current_app
 
-import marshmallow as mm
-from marshmallow.compat import text_type, binary_type, iteritems
+try:
+    import marshmallow as mm
+    _has_marshmallow = True
+except ImportError:
+    _has_marshmallow = False
 
 from . import fields
 from .exceptions import SpecsError
@@ -22,25 +25,26 @@ from .model import ApiModel
 from .utils import merge, not_none, not_none_sorted
 
 
-# marshmallow field => (JSON Schema type, format)
-FIELD_MAPPING = {
-    mm.fields.Integer: ('integer', 'int32'),
-    mm.fields.Number: ('number', None),
-    mm.fields.Float: ('number', 'float'),
-    mm.fields.Fixed: ('number', None),
-    mm.fields.Decimal: ('number', None),
-    mm.fields.String: ('string', None),
-    mm.fields.Boolean: ('boolean', None),
-    mm.fields.UUID: ('string', 'uuid'),
-    mm.fields.DateTime: ('string', 'date-time'),
-    mm.fields.Date: ('string', 'date'),
-    mm.fields.Time: ('string', None),
-    mm.fields.Email: ('string', 'email'),
-    mm.fields.URL: ('string', 'url'),
-    mm.fields.Field: ('string', None),
-    mm.fields.Raw: ('string', None),
-    mm.fields.List: ('array', None),
-}
+if _has_marshmallow:
+    # marshmallow field => (JSON Schema type, format)
+    FIELD_MAPPING = {
+        mm.fields.Integer: ('integer', 'int32'),
+        mm.fields.Number: ('number', None),
+        mm.fields.Float: ('number', 'float'),
+        mm.fields.Fixed: ('number', None),
+        mm.fields.Decimal: ('number', None),
+        mm.fields.String: ('string', None),
+        mm.fields.Boolean: ('boolean', None),
+        mm.fields.UUID: ('string', 'uuid'),
+        mm.fields.DateTime: ('string', 'date-time'),
+        mm.fields.Date: ('string', 'date'),
+        mm.fields.Time: ('string', None),
+        mm.fields.Email: ('string', 'email'),
+        mm.fields.URL: ('string', 'url'),
+        mm.fields.Field: ('string', None),
+        mm.fields.Raw: ('string', None),
+        mm.fields.List: ('array', None),
+    }
 
 
 def _get_json_type_for_field(field):
@@ -363,12 +367,13 @@ class Swagger(object):
         )
 
     def serialize_schema(self, model):
-        if isclass(model) and issubclass(model, mm.Schema):
-            model = model()
-            name = model.__class__.__name__
-            schema_json = self.mm_schema_to_jsonschema(model)
-            self._registered_models[name] = SchemaProxy(schema_json)
-            return {'$ref': '#/definitions/{0}'.format(name)}
+        if _has_marshmallow:
+            if isclass(model) and issubclass(model, mm.Schema):
+                model = model()
+                name = model.__class__.__name__
+                schema_json = self.mm_schema_to_jsonschema(model)
+                self._registered_models[name] = SchemaProxy(schema_json)
+                return {'$ref': '#/definitions/{0}'.format(name)}
 
         if isinstance(model, (list, tuple)):
             model = model[0]
