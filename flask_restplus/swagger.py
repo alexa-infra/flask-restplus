@@ -13,11 +13,44 @@ from six import string_types, itervalues, iteritems, iterkeys
 
 from flask import current_app
 
+import marshmallow as mm
+from marshmallow.compat import text_type, binary_type, iteritems
 
 from . import fields
 from .exceptions import SpecsError
 from .model import ApiModel
 from .utils import merge, not_none, not_none_sorted
+
+
+# marshmallow field => (JSON Schema type, format)
+FIELD_MAPPING = {
+    mm.fields.Integer: ('integer', 'int32'),
+    mm.fields.Number: ('number', None),
+    mm.fields.Float: ('number', 'float'),
+    mm.fields.Fixed: ('number', None),
+    mm.fields.Decimal: ('number', None),
+    mm.fields.String: ('string', None),
+    mm.fields.Boolean: ('boolean', None),
+    mm.fields.UUID: ('string', 'uuid'),
+    mm.fields.DateTime: ('string', 'date-time'),
+    mm.fields.Date: ('string', 'date'),
+    mm.fields.Time: ('string', None),
+    mm.fields.Email: ('string', 'email'),
+    mm.fields.URL: ('string', 'url'),
+    mm.fields.Field: ('string', None),
+    mm.fields.Raw: ('string', None),
+    mm.fields.List: ('array', None),
+}
+
+
+def _get_json_type_for_field(field):
+    json_type, fmt = FIELD_MAPPING.get(type(field), ('string', None))
+    return json_type, fmt
+
+
+class SchemaProxy(object):
+    def __init__(self, schema):
+        self.__schema__ = schema
 
 
 #: Maps Flask/Werkzeug rooting types to Swagger ones
@@ -330,6 +363,13 @@ class Swagger(object):
         )
 
     def serialize_schema(self, model):
+        if isclass(model) and issubclass(model, mm.Schema):
+            model = model()
+            name = model.__class__.__name__
+            schema_json = self.mm_schema_to_jsonschema(model)
+            self._registered_models[name] = SchemaProxy(schema_json)
+            return {'$ref': '#/definitions/{0}'.format(name)}
+
         if isinstance(model, (list, tuple)):
             model = model[0]
             return {
@@ -408,3 +448,42 @@ class Swagger(object):
             )
         else:
             return None
+
+    def mm_field_to_property(self, field):
+        type_, fmt = _get_json_type_for_field(field)
+        ret = {
+            'type': type_,
+            'description': field.metadata.get('description', '')
+        }
+        if fmt:
+            ret['format'] = fmt
+        if field.default:
+            ret['default'] = field.default
+        ret.update(field.metadata)
+        if isinstance(field, mm.fields.Nested):
+            name = field.nested.__name__
+            schema_json = self.mm_schema_to_jsonschema(field.nested())
+            self._registered_models[name] = SchemaProxy(schema_json)
+            schema = {'$ref': '#/definitions/{0}'.format(name)}
+            if field.many:
+                ret['type'] = 'array'
+                ret['items'] = schema
+            else:
+                ret = schema
+        elif isinstance(field, mm.fields.List):
+            ret['items'] = self.mm_field_to_property(field.container)
+        return ret
+
+    def mm_schema_to_jsonschema(self, schema_cls):
+        ret = {'properties': {}}
+        for field_name, field_obj in iteritems(schema_cls._declared_fields):
+            ret['properties'][field_name] = self.mm_field_to_property(field_obj)
+            if field_obj.required:
+                ret.setdefault('required', []).append(field_name)
+        if hasattr(schema_cls, 'Meta'):
+            if hasattr(schema_cls.Meta, 'title'):
+                ret['title'] = schema_cls.Meta.title
+            if hasattr(schema_cls.Meta, 'description'):
+                ret['description'] = schema_cls.Meta.description
+        return ret
+
